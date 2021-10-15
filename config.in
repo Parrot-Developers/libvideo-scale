@@ -1,0 +1,11 @@
+    config VSCALE_LIBYUV
+        bool "vscale libyuv implementation"
+            default false
+        help
+            Enable the libyuv implementation in libvideo-scale.
+
+    config VSCALE_HISI
+        bool "vscale HiSilicon implementation"
+            default false
+        help
+            Enable the HiSilicon implementation in libvideo-scale.
