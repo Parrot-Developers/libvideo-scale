@@ -72,19 +72,17 @@ struct vscale_libyuv {
 	struct mbuf_raw_video_frame_queue *output_queue;
 	struct pomp_evt *output_event;
 	enum FilterMode libyuv_mode;
-
-	uint8_t *src_uv;
-	uint8_t *dst_uv;
 };
 
 
-#define NB_SUPPORTED_FORMATS 2
+#define NB_SUPPORTED_FORMATS 3
 static struct vdef_raw_format supported_formats[NB_SUPPORTED_FORMATS];
 static pthread_once_t supported_formats_is_init = PTHREAD_ONCE_INIT;
 static void initialize_supported_formats(void)
 {
 	supported_formats[0] = vdef_i420;
 	supported_formats[1] = vdef_nv12;
+	supported_formats[2] = vdef_nv21;
 }
 
 
@@ -260,8 +258,6 @@ static int destroy(struct vscale_scaler *base)
 
 	pthread_mutex_destroy(&self->mutex);
 	pthread_cond_destroy(&self->cond);
-	free(self->dst_uv);
-	free(self->src_uv);
 	if (self->output_event != NULL) {
 		if (pomp_evt_is_attached(self->output_event, base->loop)) {
 			ret = pomp_evt_detach_from_loop(self->output_event,
@@ -363,6 +359,8 @@ static void scale_frame(struct vscale_libyuv *self,
 		out_frame_info.plane_stride[2] = w / 2;
 	} else if (vdef_raw_format_cmp(&frame_info.format, &vdef_nv12)) {
 		out_frame_info.plane_stride[1] = w;
+	} else if (vdef_raw_format_cmp(&frame_info.format, &vdef_nv21)) {
+		out_frame_info.plane_stride[1] = w;
 	}
 	res = mbuf_raw_video_frame_new(&out_frame_info, &out_frame);
 	if (res < 0) {
@@ -432,67 +430,25 @@ static void scale_frame(struct vscale_libyuv *self,
 			ULOG_ERRNO("I420Scale", -res);
 			goto end;
 		}
-	} else if (vdef_raw_format_cmp(&frame_info.format, &vdef_nv12)) {
+	} else if (vdef_raw_format_cmp(&frame_info.format, &vdef_nv12) ||
+		   vdef_raw_format_cmp(&frame_info.format, &vdef_nv21)) {
 		plane_ratio = 2;
-		unsigned int src_w = frame_info.info.resolution.width;
-		unsigned int src_h = frame_info.info.resolution.height;
 
-		res = NV12ToI420(NULL,
-				 0,
-				 planes[1],
-				 frame_info.plane_stride[1],
-				 NULL,
-				 0,
-				 self->src_uv,
-				 src_w / 2,
-				 self->src_uv + (src_w * src_h) / 4,
-				 src_w / 2,
-				 src_w,
-				 src_h);
-
-		if (res < 0) {
-			ULOG_ERRNO("NV12ToI420", -res);
-			goto end;
-		}
-
-		res = I420Scale(planes[0],
+		res = NV12Scale(planes[0],
 				frame_info.plane_stride[0],
-				self->src_uv,
-				src_w / 2,
-				self->src_uv + (src_w * src_h) / 4,
-				src_w / 2,
-				src_w,
-				src_h,
+				planes[1],
+				frame_info.plane_stride[1],
+				frame_info.info.resolution.width,
+				frame_info.info.resolution.height,
 				dst,
 				w,
-				self->dst_uv,
-				w / 2,
-				self->dst_uv + (w * h) / 4,
-				w / 2,
+				dst + w * h,
+				w,
 				w,
 				h,
 				self->libyuv_mode);
-
 		if (res < 0) {
-			ULOG_ERRNO("I420Scale", -res);
-			goto end;
-		}
-
-		res = I420ToNV21(NULL,
-				 0,
-				 self->dst_uv,
-				 w / 2,
-				 self->dst_uv + (w * h) / 4,
-				 w / 2,
-				 NULL,
-				 0,
-				 dst + w * h,
-				 w,
-				 w,
-				 h);
-
-		if (res < 0) {
-			ULOG_ERRNO("I420ToNV12", -res);
+			ULOG_ERRNO("NV12Scale", -res);
 			goto end;
 		}
 	}
@@ -675,25 +631,6 @@ static int create(struct vscale_scaler *base)
 	if (ret < 0) {
 		ULOG_ERRNO("pomp_evt_attach_to_loop", -ret);
 		goto err;
-	}
-
-	if (vdef_raw_format_cmp(&base->config.input.format, &vdef_nv12)) {
-		self->src_uv =
-			malloc((base->config.input.info.resolution.width *
-				base->config.input.info.resolution.height) /
-			       2);
-		if (self->src_uv == NULL) {
-			ret = -ENOMEM;
-			goto err;
-		}
-		self->dst_uv =
-			malloc((base->config.output.info.resolution.width *
-				base->config.output.info.resolution.height) /
-			       2);
-		if (self->dst_uv == NULL) {
-			ret = -ENOMEM;
-			goto err;
-		}
 	}
 
 	ret = pthread_create(&self->thread, NULL, &work_routine, self);
