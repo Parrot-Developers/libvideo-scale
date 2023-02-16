@@ -68,8 +68,6 @@ target_compile_definitions(video-scale-libyuv PRIVATE "VSCALE_API_EXPORTS")
 target_compile_options(video-scale-libyuv PRIVATE "-fvisibility=hidden")
 target_compile_options(video-scale-libyuv PRIVATE "-std=gnu11")
 
-find_package(libyuv CONFIG REQUIRED)
-target_link_libraries(video-scale-libyuv yuv)
 
 target_link_libraries(video-scale-libyuv
                         futils
