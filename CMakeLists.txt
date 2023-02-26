@@ -10,6 +10,10 @@ set(LIB_SOURCES
 
 add_library(video-scale ${LIB_SOURCES})
 
+set_target_properties(video-scale PROPERTIES
+                    POSITION_INDEPENDENT_CODE ${BUILD_SHARED_LIBS}
+)
+
 target_include_directories(video-scale PUBLIC
                             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
                             $<INSTALL_INTERFACE:include>
@@ -35,6 +39,9 @@ set(LIB_SOURCES
 )
 
 add_library(video-scale-core ${LIB_SOURCES})
+set_target_properties(video-scale-core PROPERTIES
+                    POSITION_INDEPENDENT_CODE ${BUILD_SHARED_LIBS}
+)
 
 target_include_directories(video-scale-core PUBLIC
                             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/core/include>
@@ -58,6 +65,9 @@ set(LIB_SOURCES
 )
 
 add_library(video-scale-libyuv ${LIB_SOURCES})
+set_target_properties(video-scale-libyuv PROPERTIES
+                    POSITION_INDEPENDENT_CODE ${BUILD_SHARED_LIBS}
+)
 
 target_include_directories(video-scale-libyuv PUBLIC
                             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/libyuv/include>
