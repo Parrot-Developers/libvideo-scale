@@ -64,7 +64,7 @@ set(LIB_SOURCES
         libyuv/src/vscale_libyuv.c
 )
 
-add_library(video-scale-libyuv ${LIB_SOURCES})
+add_library(video-scale-libyuv STATIC ${LIB_SOURCES})
 set_target_properties(video-scale-libyuv PROPERTIES
                     POSITION_INDEPENDENT_CODE ${BUILD_SHARED_LIBS}
 )
