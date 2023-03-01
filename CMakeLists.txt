@@ -3,6 +3,13 @@ project(video-scale VERSION 1.0)
 
 option(BUILD_SHARED_LIBS "Build using shared libraries" ON)
 
+# checks if set up rpath exists for install
+if(COMMAND set_up_rpath)
+    set_up_rpath()
+else()
+    message("Set up rpath not defined!")
+endif()
+
 # ${PROJECT_NAME}
 set(LIB_SOURCES
         src/vscale.c
@@ -20,8 +27,10 @@ target_compile_options(${PROJECT_NAME} PRIVATE "-fvisibility=hidden")
 target_compile_options(${PROJECT_NAME} PRIVATE "-std=gnu99")
 
 target_link_libraries(${PROJECT_NAME} 
+                            PRIVATE
                                 pomp 
                                 ulog 
+                                futils
                                 media-buffers 
                                 video-defs 
                                 ${PROJECT_NAME}-core 
@@ -46,6 +55,8 @@ target_compile_options(${PROJECT_NAME}-core PRIVATE "-fvisibility=hidden")
 target_compile_options(${PROJECT_NAME}-core PRIVATE "-std=gnu99")
 
 target_link_libraries(${PROJECT_NAME}-core
+                        PRIVATE
+                        pomp
                         futils
                         media-buffers
                         ulog
@@ -75,6 +86,7 @@ target_compile_options(${PROJECT_NAME}-libyuv PRIVATE "-std=gnu11")
 
 
 target_link_libraries(${PROJECT_NAME}-libyuv
+                        PRIVATE
                         futils
                         media-buffers
                         media-buffers-memory
@@ -89,6 +101,22 @@ target_link_libraries(${PROJECT_NAME}-libyuv
 
 install(TARGETS ${PROJECT_NAME}
     EXPORT ${PROJECT_NAME}-targets
+    PUBLIC_HEADER DESTINATION include
+    ARCHIVE DESTINATION lib
+    LIBRARY DESTINATION lib
+    RUNTIME DESTINATION bin
+)
+
+install(TARGETS ${PROJECT_NAME}-core
+    EXPORT ${PROJECT_NAME}-core-targets
+    PUBLIC_HEADER DESTINATION include
+    ARCHIVE DESTINATION lib
+    LIBRARY DESTINATION lib
+    RUNTIME DESTINATION bin
+)
+
+install(TARGETS ${PROJECT_NAME}-libyuv
+    EXPORT ${PROJECT_NAME}-libyuv-targets
     PUBLIC_HEADER DESTINATION include
     ARCHIVE DESTINATION lib
     LIBRARY DESTINATION lib
