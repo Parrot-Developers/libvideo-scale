@@ -61,6 +61,7 @@ target_link_libraries(${PROJECT_NAME}-core
                         media-buffers
                         ulog
                         video-defs
+                        video-metadata
 )
 
 # ${PROJECT_NAME}-libyuv
