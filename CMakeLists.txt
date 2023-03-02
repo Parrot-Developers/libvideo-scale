@@ -53,10 +53,12 @@ target_compile_options(video-scale-core PRIVATE "-fvisibility=hidden")
 target_compile_options(video-scale-core PRIVATE "-std=gnu99")
 
 target_link_libraries(video-scale-core
+                        pomp
                         futils
                         media-buffers
                         ulog
                         video-defs
+                        video-metadata
 )
 
 # video-scale-libyuv
