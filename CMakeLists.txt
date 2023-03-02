@@ -3,19 +3,19 @@ project(video-scale VERSION 1.0)
 
 option(BUILD_SHARED_LIBS "Build using shared libraries" ON)
 
-# checks if set up rpath exists for install
-if(COMMAND set_up_rpath)
-    set_up_rpath()
-else()
-    message("Set up rpath not defined!")
-endif()
-
 # ${PROJECT_NAME}
 set(LIB_SOURCES
         src/vscale.c
 )
 
 add_library(${PROJECT_NAME} ${LIB_SOURCES})
+
+# checks if set up rpath exists for install
+if(COMMAND set_up_rpath)
+    set_up_rpath()
+else()
+    message("Set up rpath not defined!")
+endif()
 
 target_include_directories(${PROJECT_NAME} PUBLIC
                             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
