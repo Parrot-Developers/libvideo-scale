@@ -8,7 +8,10 @@ set(LIB_SOURCES
         src/vscale.c
 )
 
-add_library(${PROJECT_NAME} ${LIB_SOURCES})
+add_library(${PROJECT_NAME} SHARED ${LIB_SOURCES})
+set_target_properties(${PROJECT_NAME} PROPERTIES
+                    POSITION_INDEPENDENT_CODE ${BUILD_SHARED_LIBS}
+)
 
 # checks if set up rpath exists for install
 if(COMMAND set_up_rpath)
@@ -43,7 +46,10 @@ set(LIB_SOURCES
         core/src/vscale_enums.c
 )
 
-add_library(${PROJECT_NAME}-core ${LIB_SOURCES})
+add_library(${PROJECT_NAME}-core SHARED ${LIB_SOURCES})
+set_target_properties(${PROJECT_NAME}-core PROPERTIES
+                    POSITION_INDEPENDENT_CODE ${BUILD_SHARED_LIBS}
+)
 
 target_include_directories(${PROJECT_NAME}-core PUBLIC
                             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/core/include>
@@ -69,7 +75,7 @@ set(LIB_SOURCES
         libyuv/src/vscale_libyuv.c
 )
 
-add_library(${PROJECT_NAME}-libyuv ${LIB_SOURCES})
+add_library(${PROJECT_NAME}-libyuv SHARED ${LIB_SOURCES})
 
 target_include_directories(${PROJECT_NAME}-libyuv PUBLIC
                             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/libyuv/include>
@@ -97,7 +103,7 @@ target_link_libraries(${PROJECT_NAME}-libyuv
                         video-defs
                         video-metadata
                         ${PROJECT_NAME}-core
-                        yuv
+                        yuv_shared
 )
 
 install(TARGETS ${PROJECT_NAME}
