@@ -19,6 +19,7 @@ LOCAL_CONFIG_FILES := config.in
 $(call load-config)
 LOCAL_CONDITIONAL_LIBRARIES := \
 	CONFIG_VSCALE_HISI:libvideo-scale-hisi \
+	CONFIG_VSCALE_QCOM:libvideo-scale-qcom \
 	CONFIG_VSCALE_LIBYUV:libvideo-scale-libyuv
 LOCAL_EXPORT_LDLIBS := -lvideo-scale-core
 include $(BUILD_LIBRARY)

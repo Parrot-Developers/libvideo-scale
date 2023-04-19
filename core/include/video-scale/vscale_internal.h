@@ -136,6 +136,20 @@ struct vscale_ops {
 	 */
 	struct mbuf_raw_video_frame_queue *(*get_input_buffer_queue)(
 		const struct vscale_scaler *base);
+
+	/**
+	 * Get the input buffer constraints (optional).
+	 * The caller must provide a constraints structure to fill.
+	 * If the implementation does not have any input buffers constraints,
+	 * the pointer can be NULL.
+	 * @param format: input format used within the scaler
+	 * @param constraints: pointer to a vscale_input_buffer_constraints
+	 * structure (output)
+	 * @return 0 on success, negative errno value in case of error
+	 */
+	int (*get_input_buffer_constraints)(
+		const struct vdef_raw_format *format,
+		struct vscale_input_buffer_constraints *constraints);
 };
 
 

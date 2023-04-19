@@ -84,6 +84,9 @@ enum vscale_scaler_implem {
 
 	/* HiSilicon scaler implementation */
 	VSCALE_SCALER_IMPLEM_HISI,
+
+	/* Qualcomm scaler implementation */
+	VSCALE_SCALER_IMPLEM_QCOM,
 };
 
 
@@ -169,6 +172,22 @@ struct vscale_config {
 	 *  - The real type of implem_cfg must be the implementation specific
 	 *    structure, not struct vscale_config_impl */
 	struct vscale_config_impl *implem_cfg;
+};
+
+
+/* Scaler input buffer constraints */
+struct vscale_input_buffer_constraints {
+	/* Stride alignment values: these values are used to align the width of
+	 * each plane in bytes */
+	unsigned int plane_stride_align[VDEF_RAW_MAX_PLANE_COUNT];
+
+	/* Scanline alignment values: these values are used to align the height
+	 * of each plane in lines */
+	unsigned int plane_scanline_align[VDEF_RAW_MAX_PLANE_COUNT];
+
+	/* Size alignment values: these values are used to align the size of
+	 * each plane to the upper size in bytes */
+	unsigned int plane_size_align[VDEF_RAW_MAX_PLANE_COUNT];
 };
 
 

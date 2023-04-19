@@ -9,3 +9,9 @@
             default false
         help
             Enable the HiSilicon implementation in libvideo-scale.
+
+    config VSCALE_QCOM
+        bool "vscale Qualcomm implementation"
+            default false
+        help
+            Enable the Qualcomm implementation in libvideo-scale.

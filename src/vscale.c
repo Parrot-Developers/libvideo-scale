@@ -43,6 +43,11 @@ static const struct vscale_ops *implem_ops(enum vscale_scaler_implem implem)
 		return &vscale_hisi_ops;
 #endif /* BUILD_LIBVIDEO_SCALE_HISI */
 
+#ifdef BUILD_LIBVIDEO_SCALE_QCOM
+	case VSCALE_SCALER_IMPLEM_QCOM:
+		return &vscale_qcom_ops;
+#endif /* BUILD_LIBVIDEO_SCALE_QCOM */
+
 	default:
 		return NULL;
 	}
@@ -68,6 +73,14 @@ static int vscale_get_implem(enum vscale_scaler_implem *implem)
 		return 0;
 	}
 #endif /* BUILD_LIBVIDEO_SCALE_HISI */
+
+#ifdef BUILD_LIBVIDEO_SCALE_QCOM
+	if ((*implem == VSCALE_SCALER_IMPLEM_AUTO) ||
+	    (*implem == VSCALE_SCALER_IMPLEM_QCOM)) {
+		*implem = VSCALE_SCALER_IMPLEM_QCOM;
+		return 0;
+	}
+#endif /* BUILD_LIBVIDEO_SCALE_QCOM */
 
 	return -ENOSYS;
 }
@@ -213,6 +226,40 @@ vscale_get_input_buffer_queue(struct vscale_scaler *self)
 	ULOG_ERRNO_RETURN_VAL_IF(self == NULL, EINVAL, NULL);
 
 	return self->ops->get_input_buffer_queue(self);
+}
+
+
+int vscale_get_input_buffer_constraints(
+	enum vscale_scaler_implem implem,
+	const struct vdef_raw_format *format,
+	struct vscale_input_buffer_constraints *constraints)
+{
+	int ret;
+	unsigned int nb_planes;
+
+	ULOG_ERRNO_RETURN_ERR_IF(format == NULL, EINVAL);
+	ULOG_ERRNO_RETURN_ERR_IF(constraints == NULL, EINVAL);
+
+	ret = vscale_get_implem(&implem);
+	ULOG_ERRNO_RETURN_VAL_IF(ret < 0, -ret, 0);
+
+	if (implem_ops(implem)->get_input_buffer_constraints != NULL) {
+		return implem_ops(implem)->get_input_buffer_constraints(
+			format, constraints);
+	} else {
+		nb_planes = vdef_get_raw_frame_plane_count(format);
+		memset(constraints->plane_stride_align,
+		       0,
+		       nb_planes * sizeof(*constraints->plane_stride_align));
+		memset(constraints->plane_scanline_align,
+		       0,
+		       nb_planes * sizeof(*constraints->plane_scanline_align));
+		memset(constraints->plane_size_align,
+		       0,
+		       nb_planes * sizeof(*constraints->plane_size_align));
+	}
+
+	return 0;
 }
 
 

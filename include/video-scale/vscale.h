@@ -159,6 +159,21 @@ vscale_get_input_buffer_queue(struct vscale_scaler *self);
 
 
 /**
+ * Get the input buffer constraints.
+ * The caller must provide a constraints structure to fill.
+ * @param implem: scaler implementation
+ * @param format: pointer to an input format
+ * @param constraints: pointer to a vscale_input_buffer_constraints
+ * structure (output)
+ * @return 0 on success, negative errno value in case of error
+ */
+VSCALE_API int vscale_get_input_buffer_constraints(
+	enum vscale_scaler_implem implem,
+	const struct vdef_raw_format *format,
+	struct vscale_input_buffer_constraints *constraints);
+
+
+/**
  * Get the scaler implementation used.
  * @param self: scaler instance handle
  * @return the scaler implementation used, or VSCALE_SCALER_IMPLEM_AUTO

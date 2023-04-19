@@ -45,16 +45,186 @@ ULOG_DECLARE_TAG(ULOG_TAG);
 #include <video-scale/vscale.h>
 
 
-atomic_bool signal_received;
+struct vscale_prog {
+	bool stopped;
+	bool finishing;
+	bool input_finished;
+
+	struct vscale_scaler *scaler;
+
+	struct {
+		struct vraw_reader *reader;
+		int count;
+	} in;
+
+	struct {
+		struct vraw_writer *writer;
+		const char *file;
+		int count;
+		unsigned int width;
+		unsigned int height;
+	} out;
+};
 
 
-bool scaler_stopped;
-bool stream_ended;
-struct vraw_writer *writer;
-const char *output_file;
-unsigned int dst_width;
-unsigned int dst_height;
-int nframes_written;
+atomic_bool s_stopping;
+struct pomp_loop *s_loop;
+struct vscale_prog *s_prog;
+
+
+static void finish_idle(void *userdata)
+{
+	int res;
+	struct vscale_prog *self = userdata;
+
+	ULOG_ERRNO_RETURN_IF(self == NULL, EINVAL);
+
+	if (self->finishing)
+		return;
+
+	if ((atomic_load(&s_stopping)) || (self->input_finished)) {
+		self->finishing = true;
+
+		/* Flush the scaler */
+		res = vscale_flush(self->scaler, atomic_load(&s_stopping));
+		if (res < 0)
+			ULOG_ERRNO("vscale_flush", -res);
+	}
+}
+
+
+static void scale_frame_idle(void *userdata)
+{
+	int res;
+	struct vscale_prog *self = userdata;
+
+	if (self == NULL || self->finishing)
+		return;
+
+	while (!atomic_load(&s_stopping) && !self->input_finished) {
+		struct mbuf_mem *mem = 0;
+		void *data;
+		size_t size;
+		struct vraw_frame raw_frame;
+		struct mbuf_raw_video_frame *frame = 0;
+		size_t plane_size[VDEF_RAW_MAX_PLANE_COUNT];
+		int plane_count;
+		struct mbuf_pool *pool = NULL;
+
+		if (self->in.count == 0) {
+			self->input_finished = true;
+			break;
+		}
+
+		pool = vscale_get_input_buffer_pool(self->scaler);
+		if (pool) {
+			res = mbuf_pool_get(pool, &mem);
+			if (res < 0)
+				goto next;
+		} else {
+			ssize_t size =
+				vraw_reader_get_min_buf_size(self->in.reader);
+			if (size < 0) {
+				res = size;
+				ULOG_ERRNO("vraw_reader_get_min_buf_size",
+					   -res);
+				goto next;
+			}
+			res = mbuf_mem_generic_new(size, &mem);
+			if (res < 0) {
+				ULOG_ERRNO("mbuf_mem_generic_new", -res);
+				goto next;
+			}
+		}
+		res = mbuf_mem_get_data(mem, &data, &size);
+		if (res < 0) {
+			ULOG_ERRNO("mbuf_mem_get_data", -res);
+			goto next;
+		}
+
+		res = vraw_reader_frame_read(
+			self->in.reader, data, size, &raw_frame);
+		if (res == -ENOENT) {
+			self->input_finished = true;
+			mbuf_mem_unref(mem);
+			break;
+		} else if (res < 0) {
+			ULOG_ERRNO("vraw_reader_frame_read", -res);
+			goto next;
+		}
+
+		res = mbuf_raw_video_frame_new(&raw_frame.frame, &frame);
+		if (res < 0) {
+			ULOG_ERRNO("mbuf_raw_video_frame_new", -res);
+			goto next;
+		}
+
+		res = vdef_calc_raw_frame_size(&raw_frame.frame.format,
+					       &raw_frame.frame.info.resolution,
+					       NULL,
+					       NULL,
+					       NULL,
+					       NULL,
+					       plane_size,
+					       NULL);
+		if (res < 0) {
+			ULOG_ERRNO("vdef_calc_raw_frame_size", -res);
+			goto next;
+		}
+
+		plane_count =
+			vdef_get_raw_frame_plane_count(&raw_frame.frame.format);
+		for (int i = 0; i < plane_count; i++) {
+			res = mbuf_raw_video_frame_set_plane(
+				frame,
+				i,
+				mem,
+				raw_frame.cdata[i] - (uint8_t *)data,
+				plane_size[i]);
+			if (res < 0) {
+				ULOG_ERRNO("mbuf_raw_video_frame_set_plane",
+					   -res);
+				goto next;
+			}
+		}
+
+		res = mbuf_raw_video_frame_finalize(frame);
+		if (res < 0) {
+			ULOG_ERRNO("mbuf_raw_video_frame_finalize", -res);
+			goto next;
+		}
+
+		res = mbuf_raw_video_frame_queue_push(
+			vscale_get_input_buffer_queue(self->scaler), frame);
+		if (res < 0) {
+			ULOG_ERRNO("mbuf_raw_video_frame_queue_push", -res);
+			goto next;
+		}
+
+		if (self->in.count > 0)
+			self->in.count -= 1;
+
+		/* clang-format off */
+next:
+		/* clang-format on */
+		if (frame)
+			mbuf_raw_video_frame_unref(frame);
+		if (mem)
+			mbuf_mem_unref(mem);
+		if (res < 0)
+			break;
+	}
+
+	if (self->input_finished) {
+		res = pomp_loop_idle_add(s_loop, &finish_idle, self);
+		if (res < 0)
+			ULOG_ERRNO("pomp_loop_idle_add", -res);
+	} else if (!atomic_load(&s_stopping)) {
+		res = pomp_loop_idle_add(s_loop, &scale_frame_idle, self);
+		if (res < 0)
+			ULOG_ERRNO("pomp_loop_idle_add", -res);
+	}
+}
 
 
 static int is_suffix(const char *suffix, const char *s)
@@ -97,8 +267,9 @@ static void frame_output_cb(struct vscale_scaler *scaler,
 			    void *userdata)
 {
 	int res;
-
+	struct vscale_prog *self = userdata;
 	struct vdef_raw_frame frame_info;
+
 	res = mbuf_raw_video_frame_get_frame_info(frame, &frame_info);
 	if (res < 0) {
 		ULOG_ERRNO("mbuf_raw_video_frame_get_frame_info", -res);
@@ -123,33 +294,34 @@ static void frame_output_cb(struct vscale_scaler *scaler,
 		}
 	}
 
-	if (!writer) {
+	if (!self->out.writer) {
 		struct vraw_writer_config writer_cfg = {
-			.y4m = is_suffix(".y4m", output_file),
+			.y4m = is_suffix(".y4m", self->out.file),
 			.format = frame_info.format,
 			.info = /* Codecheck */
 			{
 				.resolution = /* Codecheck */
 				{
-					.width = dst_width,
-					.height = dst_height,
+					.width = self->out.width,
+					.height = self->out.height,
 				},
 			},
 		};
 
-		res = vraw_writer_new(output_file, &writer_cfg, &writer);
+		res = vraw_writer_new(
+			self->out.file, &writer_cfg, &self->out.writer);
 		if (res < 0) {
 			ULOG_ERRNO("vraw_writer_new", -res);
 			goto out;
 		}
 	}
 
-	res = vraw_writer_frame_write(writer, &raw_frame);
+	res = vraw_writer_frame_write(self->out.writer, &raw_frame);
 	if (res < 0) {
 		ULOG_ERRNO("vraw_writer_frame_write", -res);
 		goto out;
 	}
-	nframes_written += 1;
+	self->out.count += 1;
 
 	{
 		uint64_t input_time =
@@ -170,33 +342,52 @@ out:
 	for (i--; 0 <= i; i--)
 		mbuf_raw_video_frame_release_plane(
 			frame, i, raw_frame.cdata[i]);
+
+	/* handle input frame */
+	scale_frame_idle(self);
 }
 
 
 static void flush_cb(struct vscale_scaler *scaler, void *userdata)
 {
+	int res;
+	struct vscale_prog *self = userdata;
+
 	ULOGI("scaler is flushed");
-	stream_ended = true;
+
+	res = vscale_stop(self->scaler);
+	if (res < 0)
+		ULOG_ERRNO("vscale_stop", -res);
 }
 
 
 static void stop_cb(struct vscale_scaler *scaler, void *userdata)
 {
+	struct vscale_prog *self = userdata;
+
 	ULOGI("scaler is stopped");
-	scaler_stopped = true;
+	self->stopped = true;
+
+	int res = pomp_loop_wakeup(s_loop);
+	if (res < 0)
+		ULOG_ERRNO("pomp_loop_wakeup", -res);
 }
-
-
-const struct vscale_cbs vscale_cbs = {
-	.frame_output = frame_output_cb,
-	.flush = flush_cb,
-	.stop = stop_cb,
-};
 
 
 static void sighandler(int sig)
 {
-	atomic_store(&signal_received, true);
+	atomic_store(&s_stopping, true);
+
+	printf("Stopping...\n");
+	if (s_loop) {
+		ULOGI("scaling interrupted");
+		int res = pomp_loop_idle_add(s_loop, &finish_idle, s_prog);
+		if (res < 0)
+			ULOG_ERRNO("pomp_loop_idle_add", -res);
+		res = pomp_loop_wakeup(s_loop);
+		if (res < 0)
+			ULOG_ERRNO("pomp_loop_wakeup", -res);
+	}
 	signal(SIGINT, SIG_DFL);
 }
 
@@ -274,15 +465,28 @@ static uint64_t time_us(void)
 int main(int argc, char **argv)
 {
 	int res = 0;
+	int c;
+	int idx;
+	int nb_formats;
+	uint64_t end_time;
+	uint64_t start_time;
+	const char *input_file;
+	struct vraw_reader_config reader_cfg;
+	const struct vdef_raw_format *formats;
+	struct vscale_config scaler_cfg = {0};
+	struct vscale_input_buffer_constraints constraints;
 
-	atomic_init(&signal_received, false);
+	atomic_init(&s_stopping, false);
+
+	s_prog = calloc(1, sizeof(*s_prog));
+	if (s_prog == NULL) {
+		ULOG_ERRNO("calloc", ENOMEM);
+		exit(EXIT_FAILURE);
+	}
+	s_prog->in.count = -1;
 
 	welcome(argv[0]);
 
-	struct vscale_config scaler_cfg = {0};
-	int nframes = -1;
-	int c;
-	int idx;
 	while ((c = getopt_long(
 			argc, argv, short_options, long_options, &idx)) != -1) {
 		switch (c) {
@@ -306,11 +510,14 @@ int main(int argc, char **argv)
 			break;
 
 		case 'o':
-			sscanf(optarg, "%ux%u", &dst_width, &dst_height);
+			sscanf(optarg,
+			       "%ux%u",
+			       &s_prog->out.width,
+			       &s_prog->out.height);
 			break;
 
 		case 'n':
-			sscanf(optarg, "%d", &nframes);
+			sscanf(optarg, "%d", &s_prog->in.count);
 			break;
 
 		case 'f':
@@ -336,8 +543,8 @@ int main(int argc, char **argv)
 	}
 
 	scaler_cfg.output.info.resolution = (struct vdef_dim){
-		.width = dst_width,
-		.height = dst_height,
+		.width = s_prog->out.width,
+		.height = s_prog->out.height,
 	};
 
 	if (argc - optind < 2) {
@@ -345,31 +552,46 @@ int main(int argc, char **argv)
 		exit(EXIT_FAILURE);
 	}
 
-	const char *input_file = argv[optind];
-	output_file = argv[optind + 1];
+	input_file = argv[optind];
+	s_prog->out.file = argv[optind + 1];
 
-	const struct vdef_raw_format *formats;
-	int nb_formats;
-	struct pomp_loop *dispatcher = pomp_loop_new();
-	struct vraw_reader *reader = 0;
-	struct vraw_reader_config reader_cfg;
-	struct vscale_scaler *scaler = 0;
-	uint64_t end_time;
-	uint64_t start_time;
+	s_loop = pomp_loop_new();
+	if (!s_loop) {
+		res = -ENOMEM;
+		ULOG_ERRNO("pomp_loop_new", ENOMEM);
+		goto out;
+	}
 
-	res = vraw_reader_new(input_file,
-			      &(struct vraw_reader_config){
-				      .format = scaler_cfg.input.format,
-				      .info = scaler_cfg.input.info,
-				      .y4m = is_suffix(".y4m", input_file),
+	memset(&reader_cfg, 0, sizeof(reader_cfg));
+	reader_cfg.format = scaler_cfg.input.format;
+	reader_cfg.info = scaler_cfg.input.info;
+	reader_cfg.y4m = is_suffix(".y4m", input_file);
 
-			      },
-			      &reader);
+	res = vscale_get_input_buffer_constraints(
+		scaler_cfg.implem, &reader_cfg.format, &constraints);
+	if (res < 0) {
+		ULOG_ERRNO("vscale_get_input_buffer_constraints", -res);
+		goto out;
+	} else {
+		unsigned int plane_count =
+			vdef_get_raw_frame_plane_count(&reader_cfg.format);
+		memcpy(reader_cfg.plane_stride_align,
+		       constraints.plane_stride_align,
+		       plane_count * sizeof(*constraints.plane_stride_align));
+		memcpy(reader_cfg.plane_scanline_align,
+		       constraints.plane_scanline_align,
+		       plane_count * sizeof(*constraints.plane_scanline_align));
+		memcpy(reader_cfg.plane_size_align,
+		       constraints.plane_size_align,
+		       plane_count * sizeof(*constraints.plane_size_align));
+	}
+
+	res = vraw_reader_new(input_file, &reader_cfg, &s_prog->in.reader);
 	if (res < 0) {
 		ULOG_ERRNO("vraw_reader_new", -res);
 		goto out;
 	}
-	res = vraw_reader_get_config(reader, &reader_cfg);
+	res = vraw_reader_get_config(s_prog->in.reader, &reader_cfg);
 	if (res < 0) {
 		ULOG_ERRNO("vraw_reader_get_config", -res);
 		goto out;
@@ -382,18 +604,12 @@ int main(int argc, char **argv)
 	       "Output: %ux%u\n"
 	       "Filter mode: %s\n\n",
 	       input_file,
-	       output_file,
+	       s_prog->out.file,
 	       scaler_cfg.input.info.resolution.width,
 	       scaler_cfg.input.info.resolution.height,
 	       scaler_cfg.output.info.resolution.width,
 	       scaler_cfg.output.info.resolution.height,
 	       vscale_filter_mode_to_str(scaler_cfg.filter_mode));
-
-	if (!dispatcher) {
-		res = -ENOMEM;
-		ULOG_ERRNO("pomp_loop_new", ENOMEM);
-		goto out;
-	}
 
 	nb_formats =
 		vscale_get_supported_input_formats(scaler_cfg.implem, &formats);
@@ -412,15 +628,15 @@ int main(int argc, char **argv)
 			VDEF_RAW_FORMAT_TO_STR_ARG(&scaler_cfg.input.format));
 		goto out;
 	}
-	res = vscale_new(dispatcher,
+	res = vscale_new(s_loop,
 			 &scaler_cfg,
 			 &(struct vscale_cbs){
 				 .frame_output = frame_output_cb,
 				 .flush = flush_cb,
 				 .stop = stop_cb,
 			 },
-			 NULL,
-			 &scaler);
+			 s_prog,
+			 &s_prog->scaler);
 	if (res < 0) {
 		ULOG_ERRNO("vscale_new", -res);
 		goto out;
@@ -430,147 +646,30 @@ int main(int argc, char **argv)
 
 	start_time = time_us();
 
-	while (!atomic_load(&signal_received) && nframes != 0) {
-		struct mbuf_mem *mem = 0;
-		void *data;
-		size_t size;
-		struct vraw_frame raw_frame;
-		struct mbuf_raw_video_frame *frame = 0;
-		size_t plane_size[VDEF_RAW_MAX_PLANE_COUNT];
-		int plane_count;
-		struct mbuf_pool *pool = vscale_get_input_buffer_pool(scaler);
-		if (pool) {
-			res = mbuf_pool_get(pool, &mem);
-			if (res < 0) {
-				ULOG_ERRNO("mbuf_pool_get", -res);
-				goto next;
-			}
-		} else {
-			ssize_t size = vraw_reader_get_min_buf_size(reader);
-			if (size < 0) {
-				res = size;
-				ULOG_ERRNO("vraw_reader_get_min_buf_size",
-					   -res);
-				goto next;
-			}
-			res = mbuf_mem_generic_new(size, &mem);
-			if (res < 0) {
-				ULOG_ERRNO("mbuf_mem_generic_new", -res);
-				goto next;
-			}
-		}
-		res = mbuf_mem_get_data(mem, &data, &size);
-		if (res < 0) {
-			ULOG_ERRNO("mbuf_mem_get_data", -res);
-			goto next;
-		}
-
-		res = vraw_reader_frame_read(reader, data, size, &raw_frame);
-		if (res == -ENOENT) {
-			mbuf_mem_unref(mem);
-			break;
-		} else if (res < 0) {
-			ULOG_ERRNO("vraw_reader_frame_read", -res);
-			goto next;
-		}
-
-		res = mbuf_raw_video_frame_new(&raw_frame.frame, &frame);
-		if (res < 0) {
-			ULOG_ERRNO("mbuf_raw_video_frame_new", -res);
-			goto next;
-		}
-
-		res = vdef_calc_raw_frame_size(&raw_frame.frame.format,
-					       &raw_frame.frame.info.resolution,
-					       NULL,
-					       NULL,
-					       NULL,
-					       NULL,
-					       plane_size,
-					       NULL);
-		if (res < 0) {
-			ULOG_ERRNO("vdef_calc_raw_frame_size", -res);
-			goto next;
-		}
-
-		plane_count =
-			vdef_get_raw_frame_plane_count(&raw_frame.frame.format);
-		for (int i = 0; i < plane_count; i++) {
-			res = mbuf_raw_video_frame_set_plane(
-				frame,
-				i,
-				mem,
-				raw_frame.cdata[i] - (uint8_t *)data,
-				plane_size[i]);
-			if (res < 0) {
-				ULOG_ERRNO("mbuf_raw_video_frame_set_plane",
-					   -res);
-				goto next;
-			}
-		}
-
-		res = mbuf_raw_video_frame_finalize(frame);
-		if (res < 0) {
-			ULOG_ERRNO("mbuf_raw_video_frame_finalize", -res);
-			goto next;
-		}
-
-		res = mbuf_raw_video_frame_queue_push(
-			vscale_get_input_buffer_queue(scaler), frame);
-		if (res < 0) {
-			ULOG_ERRNO("mbuf_raw_video_frame_queue_push", -res);
-			goto next;
-		}
-
-		if (nframes > 0)
-			nframes -= 1;
-
-		res = pomp_loop_wait_and_process(dispatcher, 0);
-		if (res == -ETIMEDOUT)
-			res = 0;
-		if (res < 0)
-			ULOG_ERRNO("pomp_loop_wait_and_process", -res);
-
-	/* codecheck_ignore[INDENTED_LABEL] */
-	next:
-		if (frame)
-			mbuf_raw_video_frame_unref(frame);
-		if (mem)
-			mbuf_mem_unref(mem);
-		if (res < 0)
-			goto out;
-	}
-
-	res = vscale_flush(scaler, false);
+	res = pomp_loop_idle_add(s_loop, &scale_frame_idle, s_prog);
 	if (res < 0) {
-		ULOG_ERRNO("vscale_flush", -res);
+		ULOG_ERRNO("pomp_loop_idle_add", -res);
 		goto out;
 	}
 
-	while (!atomic_load(&signal_received) && !stream_ended)
-		pomp_loop_wait_and_process(dispatcher, -1);
-
-	res = vscale_stop(scaler);
-	if (res < 0) {
-		ULOG_ERRNO("vscale_stop", -res);
-		goto out;
-	}
-
-	while (!scaler_stopped)
-		pomp_loop_wait_and_process(dispatcher, -1);
+	while (!s_prog->stopped)
+		pomp_loop_wait_and_process(s_loop, -1);
 
 	end_time = time_us();
 
 	printf("\nOverall time: %.2fs / %.2ffps\n",
 	       (float)(end_time - start_time) / 1000000.,
-	       nframes_written * 1000000. / (float)(end_time - start_time));
+	       s_prog->out.count * 1000000. / (float)(end_time - start_time));
 out:
-	vraw_writer_destroy(writer);
-	if (scaler)
-		vscale_destroy(scaler);
-	if (dispatcher)
-		pomp_loop_destroy(dispatcher);
-	vraw_reader_destroy(reader);
+	if (s_prog) {
+		vraw_writer_destroy(s_prog->out.writer);
+		if (s_prog->scaler)
+			vscale_destroy(s_prog->scaler);
+		if (s_loop)
+			pomp_loop_destroy(s_loop);
+		vraw_reader_destroy(s_prog->in.reader);
+		free(s_prog);
+	}
 
 	int status = (res == 0) ? EXIT_SUCCESS : EXIT_FAILURE;
 	printf("\n%s\n", (status == EXIT_SUCCESS) ? "Done!" : "Failed!");

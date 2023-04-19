@@ -40,6 +40,8 @@ enum vscale_scaler_implem vscale_scaler_implem_from_str(const char *str)
 		return VSCALE_SCALER_IMPLEM_LIBYUV;
 	} else if (strcasecmp(str, "HISI") == 0) {
 		return VSCALE_SCALER_IMPLEM_HISI;
+	} else if (strcasecmp(str, "QCOM") == 0) {
+		return VSCALE_SCALER_IMPLEM_QCOM;
 	} else {
 		ULOGW("%s: unknown implementation '%s'", __func__, str);
 		return VSCALE_SCALER_IMPLEM_AUTO;
@@ -56,6 +58,8 @@ const char *vscale_scaler_implem_to_str(enum vscale_scaler_implem implem)
 		return "LIBYUV";
 	case VSCALE_SCALER_IMPLEM_HISI:
 		return "HISI";
+	case VSCALE_SCALER_IMPLEM_QCOM:
+		return "QCOM";
 	default:
 		return "UNKNOWN";
 	}

@@ -42,4 +42,8 @@
 #	include <video-scale/vscale_hisi.h>
 #endif /* BUILD_LIBVIDEO_SCALE_HISI */
 
+#ifdef BUILD_LIBVIDEO_SCALE_QCOM
+#	include <video-scale/vscale_qcom.h>
+#endif /* BUILD_LIBVIDEO_SCALE_QCOM */
+
 #endif /* !_VSCALE_PRIV_H_ */
