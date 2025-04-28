@@ -111,6 +111,7 @@ void vscale_default_input_filter_internal_confirm_frame(
 
 	/* Save frame timestamp to last_timestamp */
 	scaler->last_timestamp = frame_info->info.timestamp;
+	scaler->counters.in++;
 
 	/* Set the input time ancillary data to the frame */
 	time_get_monotonic(&cur_ts);

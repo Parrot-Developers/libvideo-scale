@@ -9,7 +9,7 @@ The library uses hardware-accelerated scaling when available.
 
 The following implementations are available:
 
-* _none for now_
+* LibYUV (software scaling)
 
 The application can force using a specific implementation or let the library
 decide according to what is supported by the platform.
@@ -18,10 +18,16 @@ decide according to what is supported by the platform.
 
 The library depends on the following Alchemy modules:
 
-* libulog
 * libfutils
+* libmedia-buffers
 * libpomp
-* libvideo-buffers
+* libulog
+* libvideo-defs
+* libvideo-scale-core
+* (optional) libmedia-buffers-memory (for LibYUV support)
+* (optional) libmedia-buffers-memory-generic (for LibYUV support)
+* (optional) libvideo-metadata (for LibYUV support)
+* (optional) libyuv (for LibYUV support)
 
 ## Building
 
@@ -43,3 +49,14 @@ The library is designed to run on a _libpomp_ event loop (_pomp_loop_, see
 _libpomp_ documentation). All API functions must be called from the _pomp_loop_
 thread. All callback functions (frame_output, flush or stop) are called from
 the _pomp_loop_ thread.
+
+## Testing
+
+The library can be tested using the provided _vscale_ command-line tool which
+takes as input a raw YUV file and outputs a scaled YUV file.
+
+To build the tool, enable _vscale_ in the Alchemy build configuration.
+
+For a list of available options, run
+
+    $ vscale -h

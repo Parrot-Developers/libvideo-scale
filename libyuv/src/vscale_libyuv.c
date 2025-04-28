@@ -32,9 +32,14 @@ ULOG_DECLARE_TAG(ULOG_TAG);
 
 #include <pthread.h>
 
+#if defined(__APPLE__)
+#	include <TargetConditionals.h>
+#endif
+
 #include <libyuv/convert.h>
 #include <libyuv/convert_from.h>
 #include <libyuv/scale.h>
+#include <libyuv/version.h>
 
 #include <futils/timetools.h>
 #include <libpomp.h>
@@ -141,14 +146,16 @@ static void output_evt_cb(struct pomp_evt *evt, void *userdata)
 
 			if (res < 0) {
 				if (res != -EAGAIN)
-					ULOG_ERRNO(
-						"mbuf_raw_video_frame_queue_pop",
+					VSCALE_LOG_ERRNO(
+						"mbuf_raw_video_frame"
+						"_queue_pop",
 						-res);
 				break;
 			}
 
 			self->base->cbs.frame_output(
 				self->base, 0, frame, self->base->userdata);
+			self->base->counters.out++;
 			mbuf_raw_video_frame_unref(frame);
 		}
 
@@ -253,7 +260,7 @@ static int destroy(struct vscale_scaler *base)
 		stop(base);
 		ret = pthread_join(self->thread, NULL);
 		if (ret != 0)
-			ULOG_ERRNO("pthread_join", -ret);
+			VSCALE_LOG_ERRNO("pthread_join", -ret);
 	}
 
 	pthread_mutex_destroy(&self->mutex);
@@ -263,7 +270,8 @@ static int destroy(struct vscale_scaler *base)
 			ret = pomp_evt_detach_from_loop(self->output_event,
 							base->loop);
 			if (ret < 0)
-				ULOG_ERRNO("pomp_evt_detach_from_loop", -ret);
+				VSCALE_LOG_ERRNO("pomp_evt_detach_from_loop",
+						 -ret);
 		}
 
 		pomp_evt_destroy(self->output_event);
@@ -273,7 +281,8 @@ static int destroy(struct vscale_scaler *base)
 			ret = pomp_evt_detach_from_loop(self->error_event,
 							base->loop);
 			if (ret < 0)
-				ULOG_ERRNO("pomp_evt_detach_from_loop", -ret);
+				VSCALE_LOG_ERRNO("pomp_evt_detach_from_loop",
+						 -ret);
 		}
 
 		pomp_evt_destroy(self->error_event);
@@ -282,18 +291,22 @@ static int destroy(struct vscale_scaler *base)
 	if (self->input_queue != 0) {
 		ret = mbuf_raw_video_frame_queue_flush(self->input_queue);
 		if (ret < 0)
-			ULOG_ERRNO("mbuf_raw_video_frame_queue_flush", -ret);
+			VSCALE_LOG_ERRNO("mbuf_raw_video_frame_queue_flush",
+					 -ret);
 		ret = mbuf_raw_video_frame_queue_destroy(self->input_queue);
 		if (ret < 0)
-			ULOG_ERRNO("mbuf_raw_video_frame_queue_destroy", -ret);
+			VSCALE_LOG_ERRNO("mbuf_raw_video_frame_queue_destroy",
+					 -ret);
 	}
 	if (self->output_queue != 0) {
 		ret = mbuf_raw_video_frame_queue_flush(self->output_queue);
 		if (ret < 0)
-			ULOG_ERRNO("mbuf_raw_video_frame_queue_flush", -ret);
+			VSCALE_LOG_ERRNO("mbuf_raw_video_frame_queue_flush",
+					 -ret);
 		ret = mbuf_raw_video_frame_queue_destroy(self->output_queue);
 		if (ret < 0)
-			ULOG_ERRNO("mbuf_raw_video_frame_queue_destroy", -ret);
+			VSCALE_LOG_ERRNO("mbuf_raw_video_frame_queue_destroy",
+					 -ret);
 	}
 
 	free(self);
@@ -342,7 +355,7 @@ static void scale_frame(struct vscale_libyuv *self,
 
 	int res = mbuf_raw_video_frame_get_frame_info(frame, &frame_info);
 	if (res < 0) {
-		ULOG_ERRNO("mbuf_raw_video_frame_get_frame_info", -res);
+		VSCALE_LOG_ERRNO("mbuf_raw_video_frame_get_frame_info", -res);
 		goto end;
 	}
 
@@ -364,7 +377,7 @@ static void scale_frame(struct vscale_libyuv *self,
 	}
 	res = mbuf_raw_video_frame_new(&out_frame_info, &out_frame);
 	if (res < 0) {
-		ULOG_ERRNO("mbuf_raw_video_frame_new", -res);
+		VSCALE_LOG_ERRNO("mbuf_raw_video_frame_new", -res);
 		goto end;
 		return;
 	}
@@ -377,19 +390,20 @@ static void scale_frame(struct vscale_libyuv *self,
 		&ts_us,
 		sizeof(ts_us));
 	if (res < 0) {
-		ULOG_ERRNO("mbuf_raw_video_frame_add_ancillary_buffer", -res);
+		VSCALE_LOG_ERRNO("mbuf_raw_video_frame_add_ancillary_buffer",
+				 -res);
 		goto end;
 	}
 
 	res = mbuf_mem_generic_new((w * h * 3) / 2, &mem);
 	if (res < 0) {
-		ULOG_ERRNO("mbuf_mem_generic_new", -res);
+		VSCALE_LOG_ERRNO("mbuf_mem_generic_new", -res);
 		goto end;
 	}
 
 	res = mbuf_mem_get_data(mem, &mem_data, &len);
 	if (res < 0) {
-		ULOG_ERRNO("mbuf_mem_get_data", -res);
+		VSCALE_LOG_ERRNO("mbuf_mem_get_data", -res);
 		goto end;
 	}
 	dst = mem_data;
@@ -400,10 +414,13 @@ static void scale_frame(struct vscale_libyuv *self,
 		res = mbuf_raw_video_frame_get_plane(
 			frame, i, &planes[i], &len);
 		if (res < 0) {
-			ULOG_ERRNO("mbuf_raw_video_frame_get_plane", -res);
+			VSCALE_LOG_ERRNO("mbuf_raw_video_frame_get_plane",
+					 -res);
 			goto end;
 		}
 	}
+
+	self->base->counters.pushed++;
 
 	if (vdef_raw_format_cmp(&frame_info.format, &vdef_i420)) {
 		plane_ratio = 4;
@@ -427,7 +444,7 @@ static void scale_frame(struct vscale_libyuv *self,
 				self->libyuv_mode);
 
 		if (res < 0) {
-			ULOG_ERRNO("I420Scale", -res);
+			VSCALE_LOG_ERRNO("I420Scale", -res);
 			goto end;
 		}
 	} else if (vdef_raw_format_cmp(&frame_info.format, &vdef_nv12) ||
@@ -448,17 +465,20 @@ static void scale_frame(struct vscale_libyuv *self,
 				h,
 				self->libyuv_mode);
 		if (res < 0) {
-			ULOG_ERRNO("NV12Scale", -res);
+			VSCALE_LOG_ERRNO("NV12Scale", -res);
 			goto end;
 		}
 	}
+
+	self->base->counters.pulled++;
 
 	for (unsigned int i = 0; i < plane_count; i++) {
 		size_t len = i ? (w * h) / plane_ratio : (w * h);
 		res = mbuf_raw_video_frame_set_plane(
 			out_frame, i, mem, offset, len);
 		if (res < 0) {
-			ULOG_ERRNO("mbuf_raw_video_frame_set_plane", -res);
+			VSCALE_LOG_ERRNO("mbuf_raw_video_frame_set_plane",
+					 -res);
 			goto end;
 		}
 		offset += len;
@@ -467,7 +487,8 @@ static void scale_frame(struct vscale_libyuv *self,
 	res = mbuf_raw_video_frame_foreach_ancillary_data(
 		frame, mbuf_raw_video_frame_ancillary_data_copier, out_frame);
 	if (res < 0) {
-		ULOG_ERRNO("mbuf_raw_video_frame_foreach_ancillary_data", -res);
+		VSCALE_LOG_ERRNO("mbuf_raw_video_frame_foreach_ancillary_data",
+				 -res);
 		goto end;
 	}
 
@@ -477,14 +498,14 @@ static void scale_frame(struct vscale_libyuv *self,
 		res = mbuf_raw_video_frame_set_metadata(out_frame, metadata);
 		vmeta_frame_unref(metadata);
 		if (res < 0) {
-			ULOG_ERRNO("mbuf_raw_video_frame_get_metadata", -res);
+			VSCALE_LOG_ERRNO("mbuf_raw_video_frame_get_metadata",
+					 -res);
 			goto end;
 		}
 	} else if (res == -ENOENT) {
 		/* No metadata, nothing to do */
-		res = 0;
 	} else {
-		ULOG_ERRNO("mbuf_raw_video_frame_get_metadata", -res);
+		VSCALE_LOG_ERRNO("mbuf_raw_video_frame_get_metadata", -res);
 		goto end;
 	}
 
@@ -496,13 +517,15 @@ static void scale_frame(struct vscale_libyuv *self,
 		&ts_us,
 		sizeof(ts_us));
 	if (res < 0) {
-		ULOG_ERRNO("mbuf_raw_video_frame_add_ancillary_buffer", -res);
+		VSCALE_LOG_ERRNO("mbuf_raw_video_frame_add_ancillary_buffer",
+				 -res);
 		goto end;
 	}
 
 	res = mbuf_raw_video_frame_finalize(out_frame);
 	if (res < 0) {
-		ULOG_ERRNO("mbuf_raw_video_frame_add_ancillary_buffer", -res);
+		VSCALE_LOG_ERRNO("mbuf_raw_video_frame_add_ancillary_buffer",
+				 -res);
 		goto end;
 	}
 
@@ -530,6 +553,18 @@ static void *work_routine(void *userdata)
 {
 	struct vscale_libyuv *self = userdata;
 
+#if defined(__APPLE__)
+#	if !TARGET_OS_IPHONE
+	int err = pthread_setname_np("vscale_libyuv");
+	if (err != 0)
+		VSCALE_LOG_ERRNO("pthread_setname_np", err);
+#	endif
+#else
+	int err = pthread_setname_np(pthread_self(), "vscale_libyuv");
+	if (err != 0)
+		VSCALE_LOG_ERRNO("pthread_setname_np", err);
+#endif
+
 	pthread_mutex_lock(&self->mutex);
 	while (true) {
 		if (self->stop_flag) {
@@ -556,7 +591,8 @@ static void *work_routine(void *userdata)
 					pomp_evt_signal(self->output_event);
 				}
 			} else {
-				ULOG_ERRNO("mbuf_raw_video_frame_pop", -res);
+				VSCALE_LOG_ERRNO("mbuf_raw_video_frame_pop",
+						 -res);
 			}
 			pthread_cond_wait(&self->cond, &self->mutex);
 		} else {
@@ -578,11 +614,13 @@ static int create(struct vscale_scaler *base)
 	self = calloc(1, sizeof(*self));
 	if (self == NULL) {
 		ret = -ENOMEM;
-		ULOG_ERRNO("calloc", -ret);
+		VSCALE_LOG_ERRNO("calloc", -ret);
 		return ret;
 	}
 	self->base = base;
 	base->derived = self;
+
+	VSCALE_LOGI("libyuv version=%d", LIBYUV_VERSION);
 
 	pthread_mutex_init(&self->mutex, NULL);
 	pthread_cond_init(&self->cond, NULL);
@@ -595,48 +633,49 @@ static int create(struct vscale_scaler *base)
 		},
 		&self->input_queue);
 	if (ret < 0) {
-		ULOG_ERRNO("mbuf_raw_video_frame_queue_new_with_args", -ret);
+		VSCALE_LOG_ERRNO("mbuf_raw_video_frame_queue_new_with_args",
+				 -ret);
 		goto err;
 	}
 
 	ret = mbuf_raw_video_frame_queue_new(&self->output_queue);
 	if (ret < 0) {
-		ULOG_ERRNO("mbuf_raw_video_frame_queue_new", -ret);
+		VSCALE_LOG_ERRNO("mbuf_raw_video_frame_queue_new", -ret);
 		goto err;
 	}
 
 	self->output_event = pomp_evt_new();
 	if (self->output_event == NULL) {
 		ret = -ENOMEM;
-		ULOG_ERRNO("pomp_evt_new", -ret);
+		VSCALE_LOG_ERRNO("pomp_evt_new", -ret);
 		goto err;
 	}
 
 	ret = pomp_evt_attach_to_loop(
 		self->output_event, base->loop, &output_evt_cb, self);
 	if (ret < 0) {
-		ULOG_ERRNO("pomp_evt_attach_to_loop", -ret);
+		VSCALE_LOG_ERRNO("pomp_evt_attach_to_loop", -ret);
 		goto err;
 	}
 
 	self->error_event = pomp_evt_new();
 	if (self->error_event == NULL) {
 		ret = -ENOMEM;
-		ULOG_ERRNO("pomp_evt_new", -ret);
+		VSCALE_LOG_ERRNO("pomp_evt_new", -ret);
 		goto err;
 	}
 
 	ret = pomp_evt_attach_to_loop(
 		self->error_event, base->loop, &error_evt_cb, self);
 	if (ret < 0) {
-		ULOG_ERRNO("pomp_evt_attach_to_loop", -ret);
+		VSCALE_LOG_ERRNO("pomp_evt_attach_to_loop", -ret);
 		goto err;
 	}
 
 	ret = pthread_create(&self->thread, NULL, &work_routine, self);
 	if (ret != 0) {
 		ret = -ret;
-		ULOG_ERRNO("pthread_create", ret);
+		VSCALE_LOG_ERRNO("pthread_create", ret);
 		goto err;
 	}
 

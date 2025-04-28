@@ -54,6 +54,14 @@ static const struct vscale_ops *implem_ops(enum vscale_scaler_implem implem)
 }
 
 
+static atomic_int s_instance_counter;
+static pthread_once_t instance_counter_is_init = PTHREAD_ONCE_INIT;
+static void initialize_instance_counter(void)
+{
+	atomic_init(&s_instance_counter, 0);
+}
+
+
 static int vscale_get_implem(enum vscale_scaler_implem *implem)
 {
 	ULOG_ERRNO_RETURN_ERR_IF(implem == NULL, EINVAL);
@@ -107,7 +115,10 @@ int vscale_new(struct pomp_loop *loop,
 	       struct vscale_scaler **ret_obj)
 {
 	int ret;
-	struct vscale_scaler *self;
+	struct vscale_scaler *self = NULL;
+
+	(void)pthread_once(&instance_counter_is_init,
+			   initialize_instance_counter);
 
 	ULOG_ERRNO_RETURN_ERR_IF(loop == NULL, EINVAL);
 	ULOG_ERRNO_RETURN_ERR_IF(config == NULL, EINVAL);
@@ -118,27 +129,43 @@ int vscale_new(struct pomp_loop *loop,
 	self = calloc(1, sizeof(*self));
 	if (self == NULL) {
 		ret = -ENOMEM;
-		ULOG_ERRNO("calloc", -ret);
+		VSCALE_LOG_ERRNO("calloc", -ret);
 		return ret;
 	}
+
+	self->base = self; /* For logging */
 	self->loop = loop;
 	self->cbs = *cbs;
 	self->userdata = userdata;
 	self->config = *config;
 	self->last_timestamp = UINT64_MAX;
+	atomic_init(&self->counters.in, 0);
+	atomic_init(&self->counters.out, 0);
+	atomic_init(&self->counters.pulled, 0);
+	atomic_init(&self->counters.pushed, 0);
 	if (config->name) {
 		self->config.name = strdup(config->name);
 		if (self->config.name == NULL) {
 			ret = -ENOMEM;
-			ULOG_ERRNO("strdup", -ret);
+			VSCALE_LOG_ERRNO("strdup", -ret);
 			goto error;
 		}
+	}
+	self->scaler_id = (atomic_fetch_add(&s_instance_counter, 1) + 1);
+	if (self->config.name != NULL)
+		ret = asprintf(&self->scaler_name, "%s", self->config.name);
+	else
+		ret = asprintf(&self->scaler_name, "%02d", self->scaler_id);
+	if (ret < 0) {
+		ret = -ENOMEM;
+		ULOG_ERRNO("asprintf", -ret);
+		goto error;
 	}
 
 	ret = vscale_get_implem(&self->config.implem);
 	if (ret < 0) {
 		if (ret == -ENOSYS)
-			ULOGE("%s: no implementation found", __func__);
+			VSCALE_LOGE("%s: no implementation found", __func__);
 		goto error;
 	}
 
@@ -148,18 +175,19 @@ int vscale_new(struct pomp_loop *loop,
 	    self->ops->stop == NULL || self->ops->destroy == NULL ||
 	    self->ops->get_input_buffer_pool == NULL ||
 	    self->ops->get_input_buffer_queue == NULL) {
-		ULOGE("%s: incomplete implementation", __func__);
+		VSCALE_LOGE("%s: incomplete implementation", __func__);
 		ret = -EPROTO;
 		goto error;
 	}
 
 	if (vdef_dim_is_null(&self->config.input.info.resolution) ||
 	    vdef_dim_is_null(&self->config.output.info.resolution)) {
-		ULOGE("invalid input or output dimensions: %ux%u -> %ux%u",
-		      self->config.input.info.resolution.width,
-		      self->config.input.info.resolution.height,
-		      self->config.output.info.resolution.width,
-		      self->config.output.info.resolution.height);
+		VSCALE_LOGE(
+			"invalid input or output dimensions: %ux%u -> %ux%u",
+			self->config.input.info.resolution.width,
+			self->config.input.info.resolution.height,
+			self->config.output.info.resolution.width,
+			self->config.output.info.resolution.height);
 		ret = -EINVAL;
 		goto error;
 	}
@@ -167,6 +195,13 @@ int vscale_new(struct pomp_loop *loop,
 	ret = self->ops->create(self);
 	if (ret < 0)
 		goto error;
+
+	/* Log input/output info */
+	VSCALE_LOGI("input: width=%u height=%u, output: width=%u height=%u",
+		    self->config.input.info.resolution.width,
+		    self->config.input.info.resolution.height,
+		    self->config.output.info.resolution.width,
+		    self->config.output.info.resolution.height);
 
 	*ret_obj = self;
 	return 0;
@@ -203,8 +238,15 @@ int vscale_destroy(struct vscale_scaler *self)
 	if (self->derived)
 		ret = self->ops->destroy(self);
 
+	VSCALE_LOGI("vscale instance stats: [%u [%u %u] %u]",
+		    self->counters.in,
+		    self->counters.pushed,
+		    self->counters.pulled,
+		    self->counters.out);
+
 	if (ret == 0) {
 		free((void *)self->config.name);
+		free(self->scaler_name);
 		free(self);
 	}
 

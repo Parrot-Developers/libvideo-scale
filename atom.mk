@@ -6,7 +6,7 @@ LOCAL_MODULE := libvideo-scale
 LOCAL_CATEGORY_PATH := libs
 LOCAL_DESCRIPTION := Video scaling library
 LOCAL_EXPORT_C_INCLUDES := $(LOCAL_PATH)/include
-LOCAL_CFLAGS := -DVSCALE_API_EXPORTS -fvisibility=hidden -std=gnu99
+LOCAL_CFLAGS := -DVSCALE_API_EXPORTS -fvisibility=hidden -std=gnu99 -D_GNU_SOURCE
 LOCAL_SRC_FILES := \
 	src/vscale.c
 LOCAL_LIBRARIES := \
@@ -31,7 +31,7 @@ LOCAL_MODULE := libvideo-scale-core
 LOCAL_CATEGORY_PATH := libs
 LOCAL_DESCRIPTION := Video scaling library: core files
 LOCAL_EXPORT_C_INCLUDES := $(LOCAL_PATH)/core/include
-LOCAL_CFLAGS := -DVSCALE_API_EXPORTS -fvisibility=hidden -std=gnu99
+LOCAL_CFLAGS := -DVSCALE_API_EXPORTS -fvisibility=hidden -std=gnu99 -D_GNU_SOURCE
 LOCAL_SRC_FILES := \
 	core/src/vscale_core.c \
 	core/src/vscale_enums.c
@@ -48,7 +48,7 @@ LOCAL_MODULE := libvideo-scale-libyuv
 LOCAL_CATEGORY_PATH := libs
 LOCAL_DESCRIPTION := Video scaling library: libyuv implementation
 LOCAL_EXPORT_C_INCLUDES := $(LOCAL_PATH)/libyuv/include
-LOCAL_CFLAGS := -DVSCALE_API_EXPORTS -fvisibility=hidden -std=gnu11
+LOCAL_CFLAGS := -DVSCALE_API_EXPORTS -fvisibility=hidden -std=gnu11 -D_GNU_SOURCE
 LOCAL_SRC_FILES := \
 	libyuv/src/vscale_libyuv.c
 LOCAL_LIBRARIES := \

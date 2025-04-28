@@ -27,7 +27,10 @@
 #ifndef _VSCALE_PRIV_H_
 #define _VSCALE_PRIV_H_
 
+#include <pthread.h>
+#include <stdatomic.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #include <futils/futils.h>
 #include <ulog.h>

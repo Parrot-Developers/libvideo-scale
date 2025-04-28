@@ -28,6 +28,13 @@
 #define _VSCALE_INTERNAL_H
 
 #include <inttypes.h>
+#ifdef __cplusplus
+#	include <atomic>
+/* codecheck_ignore[SPACING] */
+using std::atomic_uint;
+#else
+#	include <stdatomic.h>
+#endif
 
 #include <video-scale/vscale_core.h>
 
@@ -46,6 +53,69 @@ extern "C" {
 #else /* !VSCALE_API_EXPORTS */
 #	define VSCALE_INTERNAL_API
 #endif /* !VSCALE_API_EXPORTS */
+
+
+/* Specific logging functions : log the instance ID before the log message */
+#define VSCALE_LOG_INT(_pri, _fmt, ...)                                        \
+	do {                                                                   \
+		char *prefix = (self != NULL && self->base != NULL)            \
+				       ? self->base->scaler_name               \
+				       : "";                                   \
+		ULOG_PRI(_pri,                                                 \
+			 "%s%s" _fmt,                                          \
+			 prefix != NULL ? prefix : "",                         \
+			 prefix != NULL ? ": " : "",                           \
+			 ##__VA_ARGS__);                                       \
+	} while (0)
+#define VSCALE_LOGD(_fmt, ...) VSCALE_LOG_INT(ULOG_DEBUG, _fmt, ##__VA_ARGS__)
+#define VSCALE_LOGI(_fmt, ...) VSCALE_LOG_INT(ULOG_INFO, _fmt, ##__VA_ARGS__)
+#define VSCALE_LOGW(_fmt, ...) VSCALE_LOG_INT(ULOG_WARN, _fmt, ##__VA_ARGS__)
+#define VSCALE_LOGE(_fmt, ...) VSCALE_LOG_INT(ULOG_ERR, _fmt, ##__VA_ARGS__)
+#define VSCALE_LOG_ERRNO(_fmt, _err, ...)                                      \
+	do {                                                                   \
+		char *prefix = (self != NULL && self->base != NULL)            \
+				       ? self->base->scaler_name               \
+				       : "";                                   \
+		ULOGE_ERRNO((_err),                                            \
+			    "%s%s" _fmt,                                       \
+			    prefix != NULL ? prefix : "",                      \
+			    prefix != NULL ? ": " : "",                        \
+			    ##__VA_ARGS__);                                    \
+	} while (0)
+#define VSCALE_LOGW_ERRNO(_fmt, _err, ...)                                     \
+	do {                                                                   \
+		char *prefix = (self != NULL && self->base != NULL)            \
+				       ? self->base->scaler_name               \
+				       : "";                                   \
+		ULOGW_ERRNO((_err),                                            \
+			    "%s%s" _fmt,                                       \
+			    prefix != NULL ? prefix : "",                      \
+			    prefix != NULL ? ": " : "",                        \
+			    ##__VA_ARGS__);                                    \
+	} while (0)
+#define VSCALE_LOG_ERRNO_RETURN_IF(_cond, _err)                                \
+	do {                                                                   \
+		if (ULOG_UNLIKELY(_cond)) {                                    \
+			VSCALE_LOG_ERRNO("", (_err));                          \
+			return;                                                \
+		}                                                              \
+	} while (0)
+#define VSCALE_LOG_ERRNO_RETURN_ERR_IF(_cond, _err)                            \
+	do {                                                                   \
+		if (ULOG_UNLIKELY(_cond)) {                                    \
+			int __pdraw_errno__err = (_err);                       \
+			VSCALE_LOG_ERRNO("", (__pdraw_errno__err));            \
+			return -(__pdraw_errno__err);                          \
+		}                                                              \
+	} while (0)
+#define VSCALE_LOG_ERRNO_RETURN_VAL_IF(_cond, _err, _val)                      \
+	do {                                                                   \
+		if (ULOG_UNLIKELY(_cond)) {                                    \
+			VSCALE_LOG_ERRNO("", (_err));                          \
+			/* codecheck_ignore[RETURN_PARENTHESES] */             \
+			return (_val);                                         \
+		}                                                              \
+	} while (0)
 
 
 struct vscale_ops {
@@ -154,6 +224,8 @@ struct vscale_ops {
 
 
 struct vscale_scaler {
+	/* Reserved */
+	struct vscale_scaler *base;
 	void *derived;
 	const struct vscale_ops *ops;
 	struct pomp_loop *loop;
@@ -161,7 +233,22 @@ struct vscale_scaler {
 	void *userdata;
 	struct vscale_config config;
 	uint64_t last_timestamp;
+
+	int scaler_id;
+	char *scaler_name;
+
+	struct {
+		/* Frames that have passed the input filter */
+		atomic_uint in;
+		/* Frames that have been pushed to the scaler */
+		atomic_uint pushed;
+		/* Frames that have been pulled from the scaler */
+		atomic_uint pulled;
+		/* Frames that have been output (frame_output) */
+		atomic_uint out;
+	} counters;
 };
+
 
 /**
  * Default filter for the input frame queue.
