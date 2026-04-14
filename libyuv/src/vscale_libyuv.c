@@ -31,12 +31,14 @@ ULOG_DECLARE_TAG(ULOG_TAG);
 #include <stdatomic.h>
 
 #include <pthread.h>
+#include <string.h>
 
 #if defined(__APPLE__)
 #	include <TargetConditionals.h>
 #endif
 
 #include <libyuv/convert.h>
+#include <libyuv/convert_argb.h>
 #include <libyuv/convert_from.h>
 #include <libyuv/scale.h>
 #include <libyuv/version.h>
@@ -46,6 +48,7 @@ ULOG_DECLARE_TAG(ULOG_TAG);
 #include <media-buffers/mbuf_mem_generic.h>
 #include <media-buffers/mbuf_raw_video_frame.h>
 #include <video-scale/vscale_internal.h>
+
 
 enum state {
 	RUNNING,
@@ -77,6 +80,8 @@ struct vscale_libyuv {
 	struct mbuf_raw_video_frame_queue *output_queue;
 	struct pomp_evt *output_event;
 	enum FilterMode libyuv_mode;
+	struct mbuf_mem *tmp_mem;
+	size_t tmp_mem_size;
 };
 
 
@@ -309,6 +314,9 @@ static int destroy(struct vscale_scaler *base)
 					 -ret);
 	}
 
+	if (self->tmp_mem != NULL)
+		mbuf_mem_unref(self->tmp_mem);
+
 	free(self);
 	return 0;
 }
@@ -334,11 +342,106 @@ static bool input_filter(struct mbuf_raw_video_frame *frame, void *userdata)
 }
 
 
+static int do_scale(const struct vdef_raw_format *format,
+		    const void *src_planes[3],
+		    const size_t src_strides[3],
+		    int src_width,
+		    int src_height,
+		    uint8_t *dst,
+		    int dst_width,
+		    int dst_height,
+		    enum FilterMode mode)
+{
+	if (vdef_raw_format_cmp(format, &vdef_i420)) {
+		return I420Scale(src_planes[0],
+				 src_strides[0],
+				 src_planes[1],
+				 src_strides[1],
+				 src_planes[2],
+				 src_strides[2],
+				 src_width,
+				 src_height,
+				 dst,
+				 dst_width,
+				 dst + dst_width * dst_height,
+				 dst_width / 2,
+				 dst + (dst_width * dst_height * 5) / 4,
+				 dst_width / 2,
+				 dst_width,
+				 dst_height,
+				 mode);
+	} else if (vdef_raw_format_cmp(format, &vdef_nv12) ||
+		   vdef_raw_format_cmp(format, &vdef_nv21)) {
+		return NV12Scale(src_planes[0],
+				 src_strides[0],
+				 src_planes[1],
+				 src_strides[1],
+				 src_width,
+				 src_height,
+				 dst,
+				 dst_width,
+				 dst + dst_width * dst_height,
+				 dst_width,
+				 dst_width,
+				 dst_height,
+				 mode);
+	}
+	return -ENOSYS;
+}
+
+
+static int do_to_raw(const struct vdef_raw_format *format,
+		     const uint8_t *src_y,
+		     int src_stride_y,
+		     const uint8_t *src_u,
+		     int src_stride_u,
+		     const uint8_t *src_v,
+		     int src_stride_v,
+		     uint8_t *dst,
+		     int dst_stride,
+		     int width,
+		     int height)
+{
+	if (vdef_raw_format_cmp(format, &vdef_i420)) {
+		return I420ToRAW(src_y,
+				 src_stride_y,
+				 src_u,
+				 src_stride_u,
+				 src_v,
+				 src_stride_v,
+				 dst,
+				 dst_stride,
+				 width,
+				 height);
+	} else if (vdef_raw_format_cmp(format, &vdef_nv12)) {
+		return NV12ToRAW(src_y,
+				 src_stride_y,
+				 src_u,
+				 src_stride_u,
+				 dst,
+				 dst_stride,
+				 width,
+				 height);
+	} else if (vdef_raw_format_cmp(format, &vdef_nv21)) {
+		return NV21ToRAW(src_y,
+				 src_stride_y,
+				 src_u,
+				 src_stride_u,
+				 dst,
+				 dst_stride,
+				 width,
+				 height);
+	}
+	return -ENOSYS;
+}
+
+
 static void scale_frame(struct vscale_libyuv *self,
 			struct mbuf_raw_video_frame *frame)
 {
 	struct vdef_raw_frame frame_info;
 	unsigned int plane_count;
+	unsigned int out_plane_count;
 	const void *planes[3] = {0};
 	int plane_ratio = 1;
 	size_t offset = 0;
@@ -350,36 +453,56 @@ static void scale_frame(struct vscale_libyuv *self,
 	uint8_t *dst;
 	struct mbuf_raw_video_frame *out_frame = NULL;
 	struct vdef_raw_frame out_frame_info;
-	unsigned int w;
-	unsigned int h;
+	const unsigned int w = self->base->config.output.info.resolution.width;
+	const unsigned int h = self->base->config.output.info.resolution.height;
+	struct vdef_raw_format out_fmt;
+	size_t mem_size;
+	int res;
+	uint8_t *scale_dst = NULL;
+	const uint8_t *conv_src_y = NULL;
+	const uint8_t *conv_src_u = NULL;
+	const uint8_t *conv_src_v = NULL;
+	size_t conv_src_stride_y = 0;
+	size_t conv_src_stride_u = 0;
+	size_t conv_src_stride_v = 0;
+	bool scaling_needed = false;
 
-	int res = mbuf_raw_video_frame_get_frame_info(frame, &frame_info);
+	res = mbuf_raw_video_frame_get_frame_info(frame, &frame_info);
 	if (res < 0) {
 		VSCALE_LOG_ERRNO("mbuf_raw_video_frame_get_frame_info", -res);
 		goto end;
 	}
 
+	out_fmt = frame_info.format;
+	if (vdef_is_raw_format_valid(
+		    &self->base->config.output.preferred_format)) {
+		out_fmt = self->base->config.output.preferred_format;
+	}
+	out_plane_count = vdef_get_raw_frame_plane_count(&out_fmt);
 	out_frame_info = frame_info;
 
-	w = self->base->config.output.info.resolution.width;
-	h = self->base->config.output.info.resolution.height;
 	out_frame_info.info.resolution.width = w;
 	out_frame_info.info.resolution.height = h;
+	memset(out_frame_info.plane_stride,
+	       0,
+	       sizeof(out_frame_info.plane_stride));
 	out_frame_info.plane_stride[0] = w;
+	out_frame_info.format = out_fmt;
 
-	if (vdef_raw_format_cmp(&frame_info.format, &vdef_i420)) {
+	if (vdef_raw_format_cmp(&out_fmt, &vdef_i420)) {
 		out_frame_info.plane_stride[1] = w / 2;
 		out_frame_info.plane_stride[2] = w / 2;
-	} else if (vdef_raw_format_cmp(&frame_info.format, &vdef_nv12)) {
+	} else if (vdef_raw_format_cmp(&out_fmt, &vdef_nv12)) {
 		out_frame_info.plane_stride[1] = w;
-	} else if (vdef_raw_format_cmp(&frame_info.format, &vdef_nv21)) {
+	} else if (vdef_raw_format_cmp(&out_fmt, &vdef_nv21)) {
 		out_frame_info.plane_stride[1] = w;
+	} else if (vdef_raw_format_cmp(&out_fmt, &vdef_rgb)) {
+		out_frame_info.plane_stride[0] = w * 3;
 	}
 	res = mbuf_raw_video_frame_new(&out_frame_info, &out_frame);
 	if (res < 0) {
 		VSCALE_LOG_ERRNO("mbuf_raw_video_frame_new", -res);
 		goto end;
-		return;
 	}
 
 	time_get_monotonic(&cur_ts);
@@ -395,7 +518,10 @@ static void scale_frame(struct vscale_libyuv *self,
 		goto end;
 	}
 
-	res = mbuf_mem_generic_new((w * h * 3) / 2, &mem);
+	mem_size = (vdef_raw_format_cmp(&out_fmt, &vdef_rgb))
+			   ? (w * h * 3)
+			   : ((w * h * 3) / 2);
+	res = mbuf_mem_generic_new(mem_size, &mem);
 	if (res < 0) {
 		VSCALE_LOG_ERRNO("mbuf_mem_generic_new", -res);
 		goto end;
@@ -422,58 +548,112 @@ static void scale_frame(struct vscale_libyuv *self,
 
 	self->base->counters.pushed++;
 
-	if (vdef_raw_format_cmp(&frame_info.format, &vdef_i420)) {
-		plane_ratio = 4;
+	conv_src_y = (const uint8_t *)planes[0];
+	conv_src_u = (const uint8_t *)planes[1];
+	conv_src_v = (const uint8_t *)planes[2];
+	conv_src_stride_y = frame_info.plane_stride[0];
+	conv_src_stride_u = frame_info.plane_stride[1];
+	conv_src_stride_v = frame_info.plane_stride[2];
+	scaling_needed =
+		!vdef_dim_cmp(&self->base->config.output.info.resolution,
+			      &frame_info.info.resolution);
 
-		res = I420Scale(planes[0],
-				frame_info.plane_stride[0],
-				planes[1],
-				frame_info.plane_stride[1],
-				planes[2],
-				frame_info.plane_stride[2],
-				frame_info.info.resolution.width,
-				frame_info.info.resolution.height,
-				dst,
-				w,
-				dst + w * h,
-				w / 2,
-				dst + (w * h * 5) / 4,
-				w / 2,
-				w,
-				h,
-				self->libyuv_mode);
+	if (vdef_raw_format_cmp(&frame_info.format, &out_fmt)) {
+		/* Same format: scale directly to output */
+		scale_dst = dst;
+		plane_ratio =
+			(vdef_raw_format_cmp(&out_fmt, &vdef_i420)) ? 4 : 2;
+	} else if (vdef_raw_format_cmp(&out_fmt, &vdef_rgb)) {
+		/* RGB output: scale to intermediate buffer if needed */
+		if (scaling_needed) {
+			size_t tmp_size = (w * h * 3) / 2;
+			if (self->tmp_mem == NULL ||
+			    self->tmp_mem_size < tmp_size) {
+				if (self->tmp_mem != NULL)
+					mbuf_mem_unref(self->tmp_mem);
+				res = mbuf_mem_generic_new(tmp_size,
+							   &self->tmp_mem);
+				if (res < 0) {
+					self->tmp_mem_size = 0;
+					VSCALE_LOG_ERRNO("mbuf_mem_generic_new",
+							 -res);
+					goto end;
+				}
+				self->tmp_mem_size = tmp_size;
+			}
 
+			uint8_t *tmp_yuv_data = NULL;
+			res = mbuf_mem_get_data(
+				self->tmp_mem, (void **)&tmp_yuv_data, &len);
+			if (res < 0) {
+				VSCALE_LOG_ERRNO("mbuf_mem_get_data", -res);
+				goto end;
+			}
+			scale_dst = tmp_yuv_data;
+		}
+	} else {
+		res = -ENOSYS;
+		VSCALE_LOGE("unsupported conversion path");
+		goto end;
+	}
+
+	/* Perform scaling if required */
+	if (scale_dst != NULL) {
+		res = do_scale(&frame_info.format,
+			       planes,
+			       frame_info.plane_stride,
+			       frame_info.info.resolution.width,
+			       frame_info.info.resolution.height,
+			       scale_dst,
+			       w,
+			       h,
+			       self->libyuv_mode);
 		if (res < 0) {
-			VSCALE_LOG_ERRNO("I420Scale", -res);
+			VSCALE_LOG_ERRNO("do_scale", -res);
 			goto end;
 		}
-	} else if (vdef_raw_format_cmp(&frame_info.format, &vdef_nv12) ||
-		   vdef_raw_format_cmp(&frame_info.format, &vdef_nv21)) {
-		plane_ratio = 2;
 
-		res = NV12Scale(planes[0],
-				frame_info.plane_stride[0],
-				planes[1],
-				frame_info.plane_stride[1],
-				frame_info.info.resolution.width,
-				frame_info.info.resolution.height,
+		/* If we scaled to intermediate buffer, it becomes the source
+		 * for conversion */
+		if (scale_dst != dst) {
+			conv_src_y = scale_dst;
+			conv_src_u = scale_dst + w * h;
+			conv_src_v = scale_dst + (w * h * 5) / 4;
+			conv_src_stride_y = w;
+			conv_src_stride_u =
+				(vdef_raw_format_cmp(&frame_info.format,
+						     &vdef_i420))
+					? w / 2
+					: w;
+			conv_src_stride_v = w / 2;
+		}
+	}
+
+	/* Perform conversion to RGB if required */
+	if (vdef_raw_format_cmp(&out_fmt, &vdef_rgb)) {
+		res = do_to_raw(&frame_info.format,
+				conv_src_y,
+				(int)conv_src_stride_y,
+				conv_src_u,
+				(int)conv_src_stride_u,
+				conv_src_v,
+				(int)conv_src_stride_v,
 				dst,
+				w * 3,
 				w,
-				dst + w * h,
-				w,
-				w,
-				h,
-				self->libyuv_mode);
+				h);
 		if (res < 0) {
-			VSCALE_LOG_ERRNO("NV12Scale", -res);
+			VSCALE_LOG_ERRNO("do_to_raw", -res);
 			goto end;
 		}
 	}
 
 	self->base->counters.pulled++;
 
-	for (unsigned int i = 0; i < plane_count; i++) {
-		size_t len = i ? (w * h) / plane_ratio : (w * h);
+	for (unsigned int i = 0; i < out_plane_count; i++) {
+		size_t len = (vdef_raw_format_cmp(&out_fmt, &vdef_rgb))
+				     ? (w * h * 3)
+				     : (i ? (w * h) / plane_ratio : (w * h));
 		res = mbuf_raw_video_frame_set_plane(
 			out_frame, i, mem, offset, len);
 		if (res < 0) {

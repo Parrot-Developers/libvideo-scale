@@ -203,6 +203,17 @@ int vscale_new(struct pomp_loop *loop,
 		    self->config.output.info.resolution.width,
 		    self->config.output.info.resolution.height);
 
+	if (vdef_is_raw_format_valid(&self->config.output.preferred_format) &&
+	    !vdef_raw_format_cmp(&self->config.input.format,
+				 &self->config.output.preferred_format)) {
+		VSCALE_LOGI(
+			"format conversion: " VDEF_RAW_FORMAT_TO_STR_FMT
+			" -> " VDEF_RAW_FORMAT_TO_STR_FMT " (preferred)",
+			VDEF_RAW_FORMAT_TO_STR_ARG(&self->config.input.format),
+			VDEF_RAW_FORMAT_TO_STR_ARG(
+				&self->config.output.preferred_format));
+	}
+
 	*ret_obj = self;
 	return 0;
 

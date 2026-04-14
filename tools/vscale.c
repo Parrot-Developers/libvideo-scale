@@ -394,6 +394,7 @@ static void sighandler(int sig)
 
 enum args_id {
 	ARGS_ID_IMPLEM = 256,
+	ARGS_ID_OUTPUT_FORMAT,
 };
 
 
@@ -408,6 +409,10 @@ static const struct option long_options[] = {
 	{"count", required_argument, NULL, 'n'},
 	{"format", required_argument, NULL, 'f'},
 	{"mode", required_argument, NULL, 'm'},
+	{"preferred-output-format",
+	 required_argument,
+	 NULL,
+	 ARGS_ID_OUTPUT_FORMAT},
 	{0, 0, 0, 0},
 };
 
@@ -425,27 +430,30 @@ static void usage(char *prog_name)
 	/* clang-format off */
 	printf("Usage: %s [options] <input_file> <output_file>\n\n"
 	       "Options:\n"
-	       "  -h | --help                        "
+	       "  -h | --help                               "
 		       "Print this message\n"
-	       "       --implem <implem_name>        "
+	       "       --implem <implem_name>               "
 		       "Force the implementation to use "
 		       "(optional, defaults to AUTO)\n"
-	       "  -i | --input <width>x<height>      "
+	       "  -i | --input <width>x<height>             "
 		       "Input dimensions in pixels "
 		       "(mandatory, unless input is *.y4m; "
 		       "ignored in that case)\n"
-	       "  -o | --output <width>x<height>     "
+	       "  -o | --output <width>x<height>            "
 		       "Output dimensions in pixels (mandatory)\n"
-	       "  -n | --count <n>                   "
+	       "  -n | --count <n>                          "
 		       "Scale at most n frames\n"
-	       "  -f | --format <format>             "
+	       "  -f | --format <format>                    "
 		       "Data format (\"I420\", \"NV12\" or \"NV21\"; "
 		       "mandatory, unless input is *.y4m; "
 		       "ignored in that case)\n"
-	       "  -m | --mode <mode>                 "
+	       "  -m | --mode <mode>                        "
 		       "Filtering mode (\"AUTO\", \"NONE\", \"LINEAR\", "
 		       "\"BILINEAR\" or \"BOX\"; optional, defaults to AUTO)\n"
-	       "\n",
+	       "       --preferred-output-format <format>   "
+		       "Preferred output format (e.g. \"I420\", \"NV12\"...)\n"
+
+		"\n",
 	       prog_name);
 	/* clang-format on */
 }
@@ -536,6 +544,17 @@ int main(int argc, char **argv)
 				vscale_filter_mode_from_str(optarg);
 			break;
 
+		case ARGS_ID_OUTPUT_FORMAT:
+			res = vdef_raw_format_from_str(
+				optarg, &scaler_cfg.output.preferred_format);
+			if (res != 0) {
+				ULOG_ERRNO("vdef_raw_format_from_str", -res);
+				usage(argv[0]);
+				goto out;
+			}
+			break;
+
+
 		default:
 			usage(argv[0]);
 			exit(EXIT_FAILURE);
@@ -602,7 +621,7 @@ int main(int argc, char **argv)
 	printf("Scaling file '%s' to file '%s'\n"
 	       "Input: %ux%u\n"
 	       "Output: %ux%u\n"
-	       "Filter mode: %s\n\n",
+	       "Filter mode: %s\n",
 	       input_file,
 	       s_prog->out.file,
 	       scaler_cfg.input.info.resolution.width,
@@ -610,6 +629,15 @@ int main(int argc, char **argv)
 	       scaler_cfg.output.info.resolution.width,
 	       scaler_cfg.output.info.resolution.height,
 	       vscale_filter_mode_to_str(scaler_cfg.filter_mode));
+
+	if (vdef_is_raw_format_valid(&scaler_cfg.output.preferred_format)) {
+		printf("Preferred output format: " VDEF_RAW_FORMAT_TO_STR_FMT
+		       "\n",
+		       VDEF_RAW_FORMAT_TO_STR_ARG(
+			       &scaler_cfg.output.preferred_format));
+	}
+
+	printf("\n");
 
 	nb_formats =
 		vscale_get_supported_input_formats(scaler_cfg.implem, &formats);
