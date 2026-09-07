@@ -83,3 +83,32 @@ LOCAL_LIBRARIES := \
 	libvideo-raw \
 	libvideo-scale
 include $(BUILD_EXECUTABLE)
+
+ifdef TARGET_TEST
+
+include $(CLEAR_VARS)
+LOCAL_MODULE := tst-libvideo-scale
+LOCAL_CFLAGS += -DTARGET_TEST -D_GNU_SOURCE
+ifeq ("$(CONFIG_VSCALE_LIBYUV)","y")
+LOCAL_CFLAGS += -DBUILD_LIBVIDEO_SCALE_LIBYUV
+endif
+LOCAL_SRC_FILES := \
+	tests/vscale_test.c \
+	tests/vscale_test_core.c \
+	tests/vscale_test_config.c \
+	tests/vscale_test_lifecycle.c
+LOCAL_LIBRARIES := \
+	libcunit \
+	libvideo-scale \
+	libvideo-scale-core \
+	libfutils \
+	libpomp \
+	libulog \
+	libvideo-defs \
+	libvideo-metadata \
+	libmedia-buffers \
+	libmedia-buffers-memory \
+	libmedia-buffers-memory-generic
+include $(BUILD_EXECUTABLE)
+
+endif

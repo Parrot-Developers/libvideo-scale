@@ -180,7 +180,7 @@ VSCALE_API int vscale_get_input_buffer_constraints(
  * in case of error
  */
 VSCALE_API enum vscale_scaler_implem
-vscale_get_used_implem(struct vscale_scaler *self);
+vscale_get_used_implem(const struct vscale_scaler *self);
 
 
 #ifdef __cplusplus

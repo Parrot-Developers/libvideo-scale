@@ -303,20 +303,22 @@ int vscale_get_input_buffer_constraints(
 		nb_planes = vdef_get_raw_frame_plane_count(format);
 		memset(constraints->plane_stride_align,
 		       0,
-		       nb_planes * sizeof(*constraints->plane_stride_align));
+		       nb_planes * sizeof(constraints->plane_stride_align[0]));
 		memset(constraints->plane_scanline_align,
 		       0,
-		       nb_planes * sizeof(*constraints->plane_scanline_align));
+		       nb_planes *
+			       sizeof(constraints->plane_scanline_align[0]));
 		memset(constraints->plane_size_align,
 		       0,
-		       nb_planes * sizeof(*constraints->plane_size_align));
+		       nb_planes * sizeof(constraints->plane_size_align[0]));
 	}
 
 	return 0;
 }
 
 
-enum vscale_scaler_implem vscale_get_used_implem(struct vscale_scaler *self)
+enum vscale_scaler_implem
+vscale_get_used_implem(const struct vscale_scaler *self)
 {
 	ULOG_ERRNO_RETURN_VAL_IF(
 		self == NULL, EINVAL, VSCALE_SCALER_IMPLEM_AUTO);

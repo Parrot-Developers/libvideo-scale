@@ -105,25 +105,6 @@ static const enum FilterMode HANDLED_FILTER_MODES[] = {
 };
 
 
-static int time_monotonic_us(uint64_t *usec)
-{
-	struct timespec ts;
-	int ret;
-
-	ret = time_get_monotonic(&ts);
-	if (ret < 0) {
-		ULOG_ERRNO("time_get_monotonic", -ret);
-		return ret;
-	}
-	ret = time_timespec_to_us(&ts, usec);
-	if (ret < 0) {
-		ULOG_ERRNO("time_timespec_to_us", -ret);
-		return ret;
-	}
-	return 0;
-}
-
-
 static void error_evt_cb(struct pomp_evt *evt, void *userdata)
 {
 	struct vscale_libyuv *self = userdata;
@@ -167,10 +148,11 @@ static void output_evt_cb(struct pomp_evt *evt, void *userdata)
 		if (self->state == WAITING_FOR_EOS) {
 			pthread_mutex_lock(&self->mutex);
 			bool eos_flag = self->eos_flag;
+			if (!eos_flag)
+				self->state = RUNNING;
 			pthread_mutex_unlock(&self->mutex);
 
 			if (!eos_flag) {
-				self->state = RUNNING;
 				if (self->base->cbs.flush != NULL)
 					self->base->cbs.flush(
 						self->base,
@@ -181,9 +163,10 @@ static void output_evt_cb(struct pomp_evt *evt, void *userdata)
 	case WAITING_FOR_STOP: {
 		pthread_mutex_lock(&self->mutex);
 		bool stop_flag = self->stop_flag;
+		if (!stop_flag)
+			self->state = RUNNING;
 		pthread_mutex_unlock(&self->mutex);
 		if (!stop_flag) {
-			self->state = RUNNING;
 			if (self->base->cbs.stop != NULL)
 				self->base->cbs.stop(self->base,
 						     self->base->userdata);
@@ -193,9 +176,10 @@ static void output_evt_cb(struct pomp_evt *evt, void *userdata)
 	case WAITING_FOR_FLUSH: {
 		pthread_mutex_lock(&self->mutex);
 		bool flush_flag = self->flush_flag;
+		if (!flush_flag)
+			self->state = RUNNING;
 		pthread_mutex_unlock(&self->mutex);
 		if (!flush_flag) {
-			self->state = RUNNING;
 			mbuf_raw_video_frame_queue_flush(self->input_queue);
 			mbuf_raw_video_frame_queue_flush(self->output_queue);
 			if (self->base->cbs.flush != NULL)
@@ -224,17 +208,15 @@ static int flush(struct vscale_scaler *base, bool discard)
 	if (discard) {
 		pthread_mutex_lock(&self->mutex);
 		self->flush_flag = true;
+		self->state = WAITING_FOR_FLUSH;
 		pthread_cond_signal(&self->cond);
 		pthread_mutex_unlock(&self->mutex);
-
-		self->state = WAITING_FOR_FLUSH;
 	} else {
 		pthread_mutex_lock(&self->mutex);
 		self->eos_flag = true;
+		self->state = WAITING_FOR_EOS;
 		pthread_cond_signal(&self->cond);
 		pthread_mutex_unlock(&self->mutex);
-
-		self->state = WAITING_FOR_EOS;
 	}
 
 	return 0;
@@ -247,10 +229,9 @@ static int stop(struct vscale_scaler *base)
 
 	pthread_mutex_lock(&self->mutex);
 	self->stop_flag = true;
+	self->state = WAITING_FOR_STOP;
 	pthread_cond_signal(&self->cond);
 	pthread_mutex_unlock(&self->mutex);
-
-	self->state = WAITING_FOR_STOP;
 
 	return 0;
 }
